@@ -1,0 +1,4 @@
+# Crea el archivo y añade el config.py adentro
+echo "config.py" > .gitignore
+echo "__pycache__/" >> .gitignore
+echo ".env" >> .gitignoregit init
