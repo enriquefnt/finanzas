@@ -2,82 +2,82 @@ import pandas as pd
 import pymysql
 import config
 
-def actualizar_db_solo_usa():
-    # Leer CSV
-    df = pd.read_csv('OperacionesFinalizadas.csv', sep=';', encoding='latin1')
-    df.columns = [col.strip() for col in df.columns]
-    
-    print("✅ CSV cargado:", len(df), "filas")
-    
-    # Limpiar
-    df['Tipo'] = df['Tipo Transacción'].fillna('').astype(str).str.strip()
-    df['Simbolo'] = df['Simbolo'].fillna('').astype(str).str.strip().str.upper()
-    
-    # Filtrar USA (excluir futuros)
-    futuros_ar = ['AL30', 'AL30D', 'GD30', 'S28N5', 'S31O5', 'T13F6', 'TZXM6', 'IRCPO', 'YMCIO']
-    df_usa = df[~df['Simbolo'].isin(futuros_ar)].copy()
-    
-    # Números
-    df_usa['Cantidad'] = pd.to_numeric(df_usa['Cantidad'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
-    df_usa['Precio'] = pd.to_numeric(df_usa['Precio Ponderado'].astype(str).str.replace(',', '.').str.replace('$', ''), errors='coerce').fillna(0)
-    
-    print(f"✅ {len(df_usa)} movimientos USA")
-    
-    # CANTIDAD NETA SIMPLIFICADA
-    df_usa['Es_Compra'] = df_usa['Tipo'].str.lower() == 'compra'
-    df_usa['Cant_Neto'] = df_usa['Es_Compra'].astype(int) * 2 - 1 * df_usa['Cantidad']
-    
-    cantidades_netas = df_usa.groupby('Simbolo')['Cant_Neto'].sum()
-    
-    # PPP solo compras
-    compras = df_usa[df_usa['Es_Compra'] == True].copy()
-    print(f"✅ {len(compras)} compras encontradas")
-    
-    compras['Costo'] = compras['Cantidad'] * compras['Precio']
-    resumen = compras.groupby('Simbolo').agg({
-        'Cantidad': 'sum',
-        'Costo': 'sum'
-    }).round(2)
-    resumen['PPP'] = resumen['Costo'] / resumen['Cantidad']
-    
-    print("\nPPP calculados:")
-    print(resumen[['PPP']].head(10))
-    
-    # DB
-    conn = pymysql.connect(
-        host='cpl16.main-hosting.eu',
-        user=config.DB_USER,
-        password=config.DB_PASSWORD,
-        database=config.DB_DATABASE
-    )
-    cursor = conn.cursor()
-    
-    # Limpiar solo USA
-    cursor.execute("DELETE FROM portfolio_monitor WHERE moneda = 'ARS' OR moneda = 'USD'")
-    
-    for ticker in resumen.index:
-        cant_neta = cantidades_netas.get(ticker, 0)
-        if cant_neta > 0:
-            ppp = round(resumen.loc[ticker, 'PPP'], 2)
-            
-            # Moneda
-            etf_us = ['IEF', 'SGOV', 'VCIT', 'VIG', 'QUAL', 'DDI']
-            moneda = 'USD' if ticker in etf_us else 'ARS'
-            
-            cursor.execute("""
-                INSERT INTO portfolio_monitor 
-                (ticker, cantidad, precio_compra, moneda, estado) 
-                VALUES (%s, %s, %s, %s, 'activo')
-            """, (ticker, cant_neta, ppp, moneda))
-            
-            print(f"✅ {ticker}: {cant_neta} x ${ppp} ({moneda})")
-    
-    conn.commit()
-    conn.close()
-    print("\n🎉 ¡¡BASE DE DATOS LISTA!!")
-    
-    print("\nVerifica:")
-    print("SELECT ticker, cantidad, precio_compra, moneda FROM portfolio_monitor")
+def actualizar_db_usa_exclusivo():
+    try:
+        # 1. Leer CSV
+        df = pd.read_csv('OperacionesFinalizadas.csv', sep=';', encoding='latin1')
+        
+        # 2. ACCESO POR POSICIÓN (No por nombre)
+        # Según tu ejemplo:
+        # Index 4: Tipo Transacción
+        # Index 8: Simbolo
+        # Index 9: Cantidad
+        # Index 11: Precio Ponderado
+        
+        df_limpio = pd.DataFrame()
+        df_limpio['Simbolo'] = df.iloc[:, 8].astype(str).str.strip().str.upper()
+        df_limpio['Tipo'] = df.iloc[:, 4].astype(str).str.strip().str.lower()
+        df_limpio['Cant_Str'] = df.iloc[:, 9].astype(str)
+        df_limpio['Precio_Str'] = df.iloc[:, 11].astype(str)
+
+        # 3. Filtrar activos USA
+        activos_usa = ['QUAL', 'VCIT', 'VIG', 'SGOV', 'VOOG', 'IEF', 'DDI','CRM']
+        df_usa = df_limpio[df_limpio['Simbolo'].isin(activos_usa)].copy()
+
+        if df_usa.empty:
+            print("⚠️ No se encontraron activos de la lista en el CSV.")
+            return
+
+        # 4. Limpieza numérica
+        df_usa['Cantidad'] = pd.to_numeric(df_usa['Cant_Str'].str.replace(',', '.'), errors='coerce').fillna(0)
+        df_usa['Precio'] = pd.to_numeric(df_usa['Precio_Str'].str.replace(',', '.'), errors='coerce').fillna(0)
+        
+        # 5. Cálculo de Posición Neta y PPP
+        # Posición
+        df_usa['Cant_Neto'] = df_usa.apply(lambda r: r['Cantidad'] if 'comp' in r['Tipo'] else -r['Cantidad'], axis=1)
+        resumen_posicion = df_usa.groupby('Simbolo')['Cant_Neto'].sum()
+
+        # PPP
+        compras = df_usa[df_usa['Tipo'].str.contains('comp', na=False)].copy()
+        resumen_ppp = pd.DataFrame()
+        if not compras.empty:
+            compras['Costo_Total'] = compras['Cantidad'] * compras['Precio']
+            resumen_ppp = compras.groupby('Simbolo').agg({'Cantidad': 'sum', 'Costo_Total': 'sum'})
+            resumen_ppp['PPP'] = resumen_ppp['Costo_Total'] / resumen_ppp['Cantidad'].replace(0, 1)
+
+        # 6. Conexión a MySQL
+        conn = pymysql.connect(
+            host='cpl16.main-hosting.eu',
+            user=config.DB_USER,
+            password=config.DB_PASSWORD,
+            database=config.DB_DATABASE
+        )
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM portfolio_monitor")
+
+        print("--- Sincronizando Cartera USA ---")
+        conteo = 0
+        for ticker in activos_usa:
+            if ticker in resumen_posicion.index:
+                cant_total = abs(resumen_posicion[ticker])
+                if cant_total > 0:
+                    ppp = 0
+                    if not resumen_ppp.empty and ticker in resumen_ppp.index:
+                        ppp = round(float(resumen_ppp.loc[ticker, 'PPP']), 2)
+                    
+                    sql = "INSERT INTO portfolio_monitor (ticker, cantidad, precio_compra, estado) VALUES (%s, %s, %s, 'activo')"
+                    cursor.execute(sql, (ticker, cant_total, ppp))
+                    print(f"✅ {ticker}: {cant_total} un. | PPP: USD {ppp}")
+                    conteo += 1
+
+        conn.commit()
+        print(f"\n🚀 Sincronización exitosa. {conteo} activos en la base de datos.")
+
+    except Exception as e:
+        print(f"❌ Error crítico: {e}")
+    finally:
+        if 'conn' in locals() and conn.open:
+            conn.close()
 
 if __name__ == "__main__":
-    actualizar_db_solo_usa()
+    actualizar_db_usa_exclusivo()

@@ -5,7 +5,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ETF US - PRECIOS EN USD
-ETF_US = ['DDI', 'IEF', 'QUAL', 'SGOV', 'VCIT', 'VIG']
+ETF_US = ['DDI', 'IEF', 'QUAL', 'SGOV', 'VCIT', 'VIG', 'VOOG', 'CRM']
 # CEDEARS - PRECIOS EN ARS  
 CEDEARS = ['AAPL', 'AMGN', 'CRM', 'MELI', 'NU', 'PG', 'PLTR', 'XP']
 
